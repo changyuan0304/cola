@@ -23,8 +23,20 @@ class ProductLocationStoryService {
       process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2aGxpZWhrc3J1ZW1mcGN3eHpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU0NDM5NjQsImV4cCI6MjA1MTAxOTk2NH0.dNOYUEpqIBdoiFIq2Fj_DmFYbvPr8n_QWJ2-ue0PNAw'
     );
 
-    // CSV 範例文章路徑
-    this.csvPath = '/Users/yu-an/Downloads/threads_posts_20260102T093557.csv';
+    // CSV 範例文章路徑（支援多個可能的路徑）
+    const possiblePaths = [
+      '/Users/yu-an/Downloads/threads_posts_20260102T093557.csv',
+      path.join(process.cwd(), 'data', 'threads_posts.csv'),
+      path.join(process.cwd(), 'threads_posts.csv')
+    ];
+
+    this.csvPath = possiblePaths.find(p => {
+      try {
+        return fs.existsSync(p);
+      } catch (e) {
+        return false;
+      }
+    });
   }
 
   /**
@@ -32,6 +44,12 @@ class ProductLocationStoryService {
    */
   getRandomThreadsPost() {
     try {
+      // 如果沒有找到 CSV 文件，返回空字串（不影響功能）
+      if (!this.csvPath) {
+        console.log('⚠️ CSV 範例文章文件不存在，將使用預設範例');
+        return '';
+      }
+
       // 讀取 CSV 文件
       const csvContent = fs.readFileSync(this.csvPath, 'utf-8');
 
