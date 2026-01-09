@@ -1,0 +1,13 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'asia-east1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cola-frontend'
+      - '--build-arg'
+      - 'REACT_APP_API_URL=https://cola-backend-450343397052.asia-east1.run.app'
+      - '.'
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'asia-east1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cola-frontend']
+images:
+  - 'asia-east1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cola-frontend'

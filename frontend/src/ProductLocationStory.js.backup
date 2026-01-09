@@ -1,0 +1,1409 @@
+import React, { useState, useEffect } from 'react';
+import { Sparkles, MapPin, Image as ImageIcon, Loader2, RotateCcw, Link as LinkIcon, Save, FileText, Trash2, X, FolderOpen, BookOpen, Eye, Upload, CheckCircle, XCircle } from 'lucide-react';
+
+function ProductLocationStory() {
+  const [step, setStep] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [scrapingUrl, setScrapingUrl] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [viewingArticles, setViewingArticles] = useState(null);  // 正在查看文章的設定
+  const [showLibrary, setShowLibrary] = useState(false);  // 左側 Library 面板
+  const [viewingArticle, setViewingArticle] = useState(null);  // 當前查看的單篇文章
+  const [contentType, setContentType] = useState('product');  // 內容類型：product, travel, discussion
+
+  // 表單數據
+  const [formData, setFormData] = useState({
+    productName: '',
+    productInfo: '',
+    productFeatures: '',
+    characterSetting: '',
+    articleCount: 1,  // 新增：生成篇數
+    articleDirection: 'experience'  // 文章方向：experience, repeat, story, photo
+  });
+
+  // URL 輸入
+  const [productUrl, setProductUrl] = useState('');
+
+  // 儲存的設定列表
+  const [savedSettings, setSavedSettings] = useState([]);
+  const [settingName, setSettingName] = useState('');
+
+  // AI 生成的結果
+  const [generatedContent, setGeneratedContent] = useState('');
+  const [locations, setLocations] = useState([]);
+  const [images, setImages] = useState([]);
+
+  // 所有已生成的文章列表
+  const [generatedArticles, setGeneratedArticles] = useState([]);
+
+  // CSV 上傳相關狀態
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResults, setUploadResults] = useState(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+
+  // 熱門行程相關狀態
+  const [popularTours, setPopularTours] = useState([]);
+  const [fetchingTours, setFetchingTours] = useState(false);
+  const [showTours, setShowTours] = useState(false);
+
+  // 載入儲存的設定列表
+  useEffect(() => {
+    const saved = localStorage.getItem('productLocationStorySettingsList');
+    if (saved) {
+      try {
+        const list = JSON.parse(saved);
+        setSavedSettings(list);
+      } catch (e) {
+        console.error('載入設定列表失敗:', e);
+      }
+    }
+  }, []);
+
+  // 從 Supabase 載入文章列表
+  const loadArticlesFromSupabase = async () => {
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:4001';
+      const response = await fetch(`${apiUrl}/api/product-location-story/articles`);
+      const data = await response.json();
+
+      if (data.success && data.articles) {
+        // 轉換 Supabase 文章格式為前端格式
+        const articles = data.articles.map(article => ({
+          id: article.id,
+          content: article.content,
+          locations: article.locations || [],
+          images: article.images || [],
+          createdAt: article.created_at,
+          contentType: article.content_type
+        }));
+        setGeneratedArticles(articles);
+        console.log(`從 Supabase 載入 ${articles.length} 篇文章`);
+      }
+    } catch (error) {
+      console.error('載入文章失敗:', error);
+    }
+  };
+
+  // 組件載入時獲取文章
+  useEffect(() => {
+    loadArticlesFromSupabase();
+  }, []);
+
+  // CSV 檔案選擇
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file && file.name.endsWith('.csv')) {
+      setSelectedFile(file);
+    } else {
+      alert('請選擇 CSV 檔案');
+      e.target.value = '';
+    }
+  };
+
+  // 上傳 CSV 檔案
+  const handleUploadCSV = async () => {
+    if (!selectedFile) {
+      alert('請先選擇 CSV 檔案');
+      return;
+    }
+
+    setUploading(true);
+    setUploadResults(null);
+    setShowUploadModal(true);
+
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:4001';
+      const formData = new FormData();
+      formData.append('csvFile', selectedFile);
+
+      const response = await fetch(`${apiUrl}/api/csv-import/upload`, {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setUploadResults(data);
+        // 重新載入文章列表
+        await loadArticlesFromSupabase();
+        alert(`成功匯入 ${data.processedCount} 篇文章！`);
+      } else {
+        throw new Error(data.message || '上傳失敗');
+      }
+    } catch (error) {
+      console.error('CSV 上傳失敗:', error);
+      alert(`上傳失敗: ${error.message}`);
+      setUploadResults({
+        success: false,
+        message: error.message
+      });
+    } finally {
+      setUploading(false);
+      setSelectedFile(null);
+      // 清空檔案輸入
+      const fileInput = document.getElementById('csv-file-input');
+      if (fileInput) fileInput.value = '';
+    }
+  };
+
+  // 爬取熱門行程
+  const handleFetchPopularTours = async () => {
+    setFetchingTours(true);
+    setShowTours(true);
+
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:4001';
+
+      // 設定 120 秒 timeout（爬蟲需要約 60 秒）
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+      const response = await fetch(`${apiUrl}/api/product-location-story/fetch-popular-tours`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      const data = await response.json();
+
+      if (data.success) {
+        // 合併易遊網和東南旅遊的行程
+        const allTours = [
+          ...(data.eztravel || []).map(tour => ({ ...tour, source: '易遊網' })),
+          ...(data.settour || []).map(tour => ({ ...tour, source: '東南旅遊' }))
+        ];
+        setPopularTours(allTours);
+        console.log(`成功獲取 ${data.totalCount} 個熱門行程 (易遊網: ${data.eztravel?.length || 0}, 東南旅遊: ${data.settour?.length || 0})`);
+      } else {
+        throw new Error(data.message || '獲取失敗');
+      }
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.error('爬取超時（超過 2 分鐘）');
+        alert('爬取超時，請稍後再試。這個操作通常需要約 1 分鐘。');
+      } else {
+        console.error('獲取熱門行程失敗:', error);
+        alert(`獲取失敗: ${error.message}`);
+      }
+    } finally {
+      setFetchingTours(false);
+    }
+  };
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  // 儲存新設定
+  const handleSaveSettings = () => {
+    if (!settingName.trim()) {
+      alert('請輸入設定名稱');
+      return;
+    }
+
+    const newSetting = {
+      id: Date.now(),
+      name: settingName,
+      data: formData,
+      articles: generatedArticles,  // 儲存所有已生成的文章
+      createdAt: new Date().toISOString()
+    };
+
+    const updatedList = [...savedSettings, newSetting];
+    setSavedSettings(updatedList);
+    localStorage.setItem('productLocationStorySettingsList', JSON.stringify(updatedList));
+
+    setSettingName('');
+    setShowSidebar(true);
+    alert('設定已儲存！');
+  };
+
+  // 載入設定
+  const handleLoadSetting = (setting) => {
+    setFormData(setting.data);
+    setGeneratedArticles(setting.articles || []);  // 載入已生成的文章
+    setShowSidebar(false);
+    alert(`已載入設定：${setting.name}`);
+  };
+
+  // 刪除設定
+  const handleDeleteSetting = (id) => {
+    if (!window.confirm('確定要刪除這個設定嗎？')) return;
+
+    const updatedList = savedSettings.filter(s => s.id !== id);
+    setSavedSettings(updatedList);
+    localStorage.setItem('productLocationStorySettingsList', JSON.stringify(updatedList));
+    alert('設定已刪除');
+  };
+
+  // 從網址爬取商品資訊
+  const handleScrapeUrl = async () => {
+    if (!productUrl) {
+      alert('請輸入商品網址');
+      return;
+    }
+
+    setScrapingUrl(true);
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:4001';
+
+      const response = await fetch(`${apiUrl}/api/product-location-story/scrape-url`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ url: productUrl })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // 自動填入爬取的內容
+        setFormData(prev => ({
+          ...prev,
+          productName: data.title || prev.productName,
+          productInfo: data.content || prev.productInfo
+        }));
+        alert('網頁內容已載入！');
+      } else {
+        alert(data.message || '爬取失敗');
+      }
+    } catch (error) {
+      console.error('爬取失敗:', error);
+      alert('爬取失敗，請檢查網址是否正確');
+    } finally {
+      setScrapingUrl(false);
+    }
+  };
+
+  // Step 1: 批量生成文案+圖片
+  const handleGenerateContent = async () => {
+    setLoading(true);
+    const articles = [];
+    const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:4001';
+
+    try {
+      const count = parseInt(formData.articleCount) || 1;
+
+      for (let i = 0; i < count; i++) {
+        console.log(`正在生成第 ${i + 1}/${count} 篇文章...`);
+
+        // 1. 生成文案
+        const contentResponse = await fetch(`${apiUrl}/api/product-location-story/generate-content`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...formData, contentType })
+        });
+
+        const contentData = await contentResponse.json();
+        if (!contentData.success) {
+          alert(`第 ${i + 1} 篇文案生成失敗`);
+          continue;
+        }
+
+        const content = contentData.content;
+
+        // 2. 生成圖片並存入 Supabase
+        const imageResponse = await fetch(`${apiUrl}/api/product-location-story/generate-images`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content,
+            contentType,
+            formData
+          })
+        });
+
+        const imageData = await imageResponse.json();
+        if (!imageData.success) {
+          alert(`第 ${i + 1} 篇圖片生成失敗`);
+          continue;
+        }
+
+        // 3. 儲存這篇文章
+        articles.push({
+          id: Date.now() + i,
+          content,
+          locations: imageData.locations || [],
+          images: imageData.images || [],
+          createdAt: new Date().toISOString()
+        });
+
+        console.log(`第 ${i + 1}/${count} 篇完成`);
+      }
+
+      if (articles.length > 0) {
+        setGeneratedContent(articles[0].content);
+        setLocations(articles[0].locations);
+        setImages(articles[0].images);
+        setStep(2);
+
+        // 重新從 Supabase 載入所有文章
+        await loadArticlesFromSupabase();
+
+        setShowLibrary(true);  // 自動打開 Library
+        alert(`成功生成 ${articles.length} 篇文章！點擊左側「文章庫」查看所有文章`);
+      } else {
+        alert('所有文章生成失敗，請重試');
+      }
+    } catch (error) {
+      console.error('生成失敗:', error);
+      alert('生成失敗，請稍後再試');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Step 2: 從文案提取地點並生成圖片
+  const handleGenerateImages = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+
+      const response = await fetch(`${apiUrl}/api/product-location-story/generate-images`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ content: generatedContent })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setLocations(data.locations);
+        setImages(data.images);
+        setStep(3);
+      } else {
+        alert(data.message || '生成圖片失敗');
+      }
+    } catch (error) {
+      console.error('生成圖片失敗:', error);
+      alert('生成圖片失敗，請稍後再試');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetForm = () => {
+    setStep(1);
+    setGeneratedContent('');
+    setLocations([]);
+    setImages([]);
+    setGeneratedArticles([]);
+    setFormData({
+      productName: '',
+      productInfo: '',
+      productFeatures: '',
+      articleCount: 1,
+      characterSetting: ''
+    });
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* 熱門行程 Modal */}
+      {showTours && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-green-500 to-green-600 px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white">熱門行程</h2>
+                <p className="text-green-100 text-sm mt-1">
+                  {fetchingTours ? '🔄 正在爬取易遊網和東南旅遊...（需要約 1 分鐘，請耐心等候）' : `共 ${popularTours.length} 個行程`}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowTours(false)}
+                className="text-white hover:text-green-100 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {fetchingTours ? (
+                <div className="flex flex-col items-center justify-center py-20">
+                  <Loader2 className="w-16 h-16 text-green-600 animate-spin mb-4" />
+                  <p className="text-lg text-gray-600">正在爬取並整理熱門行程...</p>
+                  <p className="text-sm text-gray-400 mt-2">這可能需要幾秒鐘</p>
+                </div>
+              ) : popularTours.length === 0 ? (
+                <div className="text-center py-20">
+                  <p className="text-lg text-gray-500">暫無行程資料</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {popularTours.map((tour, index) => (
+                    <div
+                      key={index}
+                      className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <h3 className="text-lg font-bold text-gray-900 flex-1">
+                          {index + 1}. {tour.name}
+                        </h3>
+                        {tour.price && (
+                          <span className="ml-2 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-semibold whitespace-nowrap">
+                            {tour.price}
+                          </span>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-sm flex-wrap">
+                          <MapPin className="w-4 h-4 text-blue-600" />
+                          <span className="text-gray-700 font-medium">{tour.destination}</span>
+                          <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs">
+                            {tour.type}
+                          </span>
+                          {tour.source && (
+                            <span className="px-2 py-1 bg-purple-50 text-purple-700 rounded text-xs">
+                              {tour.source}
+                            </span>
+                          )}
+                        </div>
+                        {tour.highlights && (
+                          <p className="text-sm text-gray-600 leading-relaxed">
+                            {tour.highlights}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
+              <p className="text-sm text-gray-500">
+                資料來源：易遊網,東南旅遊,  雄獅旅遊
+              </p>
+              <button
+                onClick={() => setShowTours(false)}
+                className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full Page Library View */}
+      {showLibrary ? (
+        <div className="min-h-screen bg-gray-100">
+          {/* Library Header */}
+          <div className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
+            <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">文章庫</h1>
+                <p className="text-sm text-gray-600 mt-1">共 {generatedArticles.length} 篇文章</p>
+              </div>
+              <div className="flex items-center gap-3">
+                {/* CSV Upload Section */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    id="csv-file-input"
+                    accept=".csv"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="csv-file-input"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 cursor-pointer text-sm font-medium"
+                  >
+                    <Upload className="w-4 h-4" />
+                    選擇 CSV
+                  </label>
+                  {selectedFile && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">{selectedFile.name}</span>
+                      <button
+                        onClick={handleUploadCSV}
+                        disabled={uploading}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                      >
+                        {uploading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            上傳中...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle className="w-4 h-4" />
+                            上傳
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setShowLibrary(false)}
+                  className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-2"
+                >
+                  <X className="w-4 h-4" />
+                  返回編輯
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Articles Grid */}
+          <div className="max-w-7xl mx-auto px-6 py-8">
+            {generatedArticles.length === 0 ? (
+              <div className="text-center py-24 bg-white rounded-lg">
+                <BookOpen className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <p className="text-lg text-gray-500">尚未生成文章</p>
+                <p className="text-sm text-gray-400 mt-2">填寫表單後點擊生成</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {generatedArticles.map((article, index) => (
+                  <div
+                    key={article.id}
+                    className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow"
+                  >
+                    {/* Article Header */}
+                    <div className="bg-gradient-to-r from-blue-500 to-blue-600 px-6 py-4">
+                      <h2 className="text-xl font-bold text-white">文章 #{index + 1}</h2>
+                      <p className="text-blue-100 text-sm mt-1">
+                        {new Date(article.createdAt).toLocaleString('zh-TW')}
+                      </p>
+                    </div>
+
+                    {/* Article Content */}
+                    <div className="p-6">
+                      <div className="prose max-w-none">
+                        <div className="text-gray-800 leading-relaxed whitespace-pre-wrap text-base">
+                          {article.content}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Article Images */}
+                    {article.images && article.images.length > 0 && (
+                      <div className="px-6 pb-6">
+                        <h3 className="text-lg font-semibold text-gray-900 mb-4">地點圖片 ({article.images.length} 張)</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                          {article.images.map((image, imgIndex) => (
+                            <div key={imgIndex} className="relative group">
+                              <img
+                                src={image.supabaseUrl}
+                                alt={`地點 ${imgIndex + 1}`}
+                                className="w-full h-40 object-cover rounded-lg border border-gray-200 shadow-sm group-hover:shadow-md transition-shadow"
+                              />
+                              <div className="absolute bottom-2 left-2 right-2 bg-black bg-opacity-75 text-white text-xs px-2 py-1 rounded text-center truncate">
+                                {image.location}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 min-w-0">
+        {/* Header */}
+        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={() => setShowLibrary(!showLibrary)}
+                  className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm font-medium"
+                >
+                  <BookOpen className="w-4 h-4 mr-2" />
+                  文章庫 ({generatedArticles.length})
+                </button>
+                <button
+                  onClick={handleFetchPopularTours}
+                  disabled={fetchingTours}
+                  className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {fetchingTours ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      爬取中...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      熱門行程
+                    </>
+                  )}
+                </button>
+                <div>
+                  <h1 className="text-2xl font-bold text-gray-900">商品地點故事生成器</h1>
+                  <p className="text-sm text-gray-600 mt-1">AI 智能生成商品故事與地點圖片</p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-3">
+                {step > 1 && (
+                  <button
+                    onClick={resetForm}
+                    className="flex items-center text-gray-600 hover:text-gray-900 transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4 mr-1" />
+                    <span className="text-sm">重置</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+      {/* Progress Steps */}
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex items-center justify-center space-x-4">
+          <div className={`flex items-center ${step >= 1 ? 'text-gray-900' : 'text-gray-400'}`}>
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${step >= 1 ? 'bg-gray-900 text-white' : 'bg-gray-200 text-gray-500'}`}>
+              1
+            </div>
+            <span className="ml-2 text-sm font-medium hidden sm:inline">輸入資訊</span>
+          </div>
+          <div className={`w-12 h-0.5 ${step >= 2 ? 'bg-gray-900' : 'bg-gray-300'}`}></div>
+          <div className={`flex items-center ${step >= 2 ? 'text-gray-900' : 'text-gray-400'}`}>
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${step >= 2 ? 'bg-gray-900 text-white' : 'bg-gray-200 text-gray-500'}`}>
+              2
+            </div>
+            <span className="ml-2 text-sm font-medium hidden sm:inline">生成文案</span>
+          </div>
+          <div className={`w-12 h-0.5 ${step >= 3 ? 'bg-gray-900' : 'bg-gray-300'}`}></div>
+          <div className={`flex items-center ${step >= 3 ? 'text-gray-900' : 'text-gray-400'}`}>
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${step >= 3 ? 'bg-gray-900 text-white' : 'bg-gray-200 text-gray-500'}`}>
+              3
+            </div>
+            <span className="ml-2 text-sm font-medium hidden sm:inline">生成圖片</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
+        {/* Step 1: 輸入表單 */}
+        {step === 1 && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">選擇內容類型</h2>
+              <p className="text-gray-600 mb-4">請選擇要生成的內容類型</p>
+
+              {/* Tab 選單 */}
+              <div className="flex border-b border-gray-200">
+                <button
+                  onClick={() => setContentType('product')}
+                  className={`px-6 py-3 font-semibold text-sm border-b-2 transition-all ${
+                    contentType === 'product'
+                      ? 'border-blue-600 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  主題商品/經驗分享
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {/* 主題商品/經驗分享 表單 */}
+              {contentType === 'product' && (
+                <>
+                  {/* URL 輸入區 */}
+                  <div className="bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg p-6">
+                    <div className="flex items-start space-x-2 mb-3">
+                      <LinkIcon className="w-5 h-5 text-gray-600 mt-0.5" />
+                      <div>
+                        <h3 className="text-sm font-semibold text-gray-900">從網址載入商品資訊</h3>
+                        <p className="text-xs text-gray-600 mt-1">輸入商品頁面網址，自動抓取內容</p>
+                      </div>
+                    </div>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={productUrl}
+                    onChange={(e) => setProductUrl(e.target.value)}
+                    placeholder="https://example.com/product/..."
+                    className="flex-1 px-4 py-2.5 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent text-sm transition-all"
+                  />
+                  <button
+                    onClick={handleScrapeUrl}
+                    disabled={scrapingUrl || !productUrl}
+                    className="px-6 py-2.5 bg-gray-900 text-white rounded-md font-medium hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm whitespace-nowrap"
+                  >
+                    {scrapingUrl ? (
+                      <span className="flex items-center">
+                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                        載入中...
+                      </span>
+                    ) : (
+                      '載入內容'
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center">
+                <div className="flex-1 border-t border-gray-300"></div>
+                <span className="px-4 text-sm text-gray-500">或手動填寫</span>
+                <div className="flex-1 border-t border-gray-300"></div>
+              </div>
+
+              {/* 文章方向選擇 */}
+              <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <label className="block text-sm font-semibold text-gray-900 mb-3">
+                  文章方向 <span className="text-red-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-all ${
+                    formData.articleDirection === 'experience'
+                      ? 'border-blue-500 bg-blue-100'
+                      : 'border-gray-300 bg-white hover:border-blue-300'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="articleDirection"
+                      value="experience"
+                      checked={formData.articleDirection === 'experience'}
+                      onChange={handleInputChange}
+                      className="mr-2"
+                    />
+                    <span className="text-sm font-medium">經驗分享</span>
+                  </label>
+
+                  <label className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-all ${
+                    formData.articleDirection === 'repeat'
+                      ? 'border-blue-500 bg-blue-100'
+                      : 'border-gray-300 bg-white hover:border-blue-300'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="articleDirection"
+                      value="repeat"
+                      checked={formData.articleDirection === 'repeat'}
+                      onChange={handleInputChange}
+                      className="mr-2"
+                    />
+                    <span className="text-sm font-medium">去過還想再參加</span>
+                  </label>
+
+                  <label className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-all ${
+                    formData.articleDirection === 'story'
+                      ? 'border-blue-500 bg-blue-100'
+                      : 'border-gray-300 bg-white hover:border-blue-300'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="articleDirection"
+                      value="story"
+                      checked={formData.articleDirection === 'story'}
+                      onChange={handleInputChange}
+                      className="mr-2"
+                    />
+                    <span className="text-sm font-medium">故事說明</span>
+                  </label>
+
+                  <label className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-all ${
+                    formData.articleDirection === 'photo'
+                      ? 'border-blue-500 bg-blue-100'
+                      : 'border-gray-300 bg-white hover:border-blue-300'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="articleDirection"
+                      value="photo"
+                      checked={formData.articleDirection === 'photo'}
+                      onChange={handleInputChange}
+                      className="mr-2"
+                    />
+                    <span className="text-sm font-medium">照片分享/自由行</span>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-900 mb-2">
+                  商品名稱 <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  name="productName"
+                  value={formData.productName}
+                  onChange={handleInputChange}
+                  placeholder="例如：瑞士經典巧克力禮盒"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-900 mb-2">
+                  商品資訊 <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  name="productInfo"
+                  value={formData.productInfo}
+                  onChange={handleInputChange}
+                  placeholder="例如：來自瑞士阿爾卑斯山脈的手工巧克力，使用 100% 有機可可豆製作"
+                  rows={4}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-900 mb-2">
+                  參考寫法
+                </label>
+                <textarea
+                  name="productFeatures"
+                  value={formData.productFeatures}
+                  onChange={handleInputChange}
+                  placeholder="貼上參考文章的寫法範例，AI 會模仿這個風格撰寫"
+                  rows={3}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-900 mb-2">
+                  字數限制
+                </label>
+                <input
+                  type="text"
+                  name="characterSetting"
+                  value={formData.characterSetting}
+                  onChange={handleInputChange}
+                  placeholder="例如：200-300"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-all"
+                />
+              </div>
+                </>
+              )}
+
+              {/* 旅行社比較 表單 */}
+              {contentType === 'travel' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-900 mb-2">
+                      比較主題 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="productName"
+                      value={formData.productName}
+                      onChange={handleInputChange}
+                      placeholder="例如：日本東京五日遊、峇里島海島度假"
+                      className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-900 mb-2">
+                      旅行社 A 方案 <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                      name="productInfo"
+                      value={formData.productInfo}
+                      onChange={handleInputChange}
+                      placeholder="例如：雄獅旅遊 - 5天4夜，含機票、住宿、早餐，NT$ 35,000"
+                      rows={4}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-900 mb-2">
+                      旅行社 B 方案
+                    </label>
+                    <textarea
+                      name="productFeatures"
+                      value={formData.productFeatures}
+                      onChange={handleInputChange}
+                      placeholder="例如：可樂旅遊 - 5天4夜，含機票、住宿、兩餐，NT$ 38,000"
+                      rows={4}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-900 mb-2">
+                      比較重點
+                    </label>
+                    <textarea
+                      name="characterSetting"
+                      value={formData.characterSetting}
+                      onChange={handleInputChange}
+                      placeholder="例如：價格、行程豐富度、住宿品質、餐食安排"
+                      rows={3}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none transition-all"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* 純文字討論 表單 */}
+              {contentType === 'discussion' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-900 mb-2">
+                      討論主題 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="productName"
+                      value={formData.productName}
+                      onChange={handleInputChange}
+                      placeholder="例如：台北咖啡店推薦、遠端工作心得"
+                      className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-900 mb-2">
+                      討論內容 <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                      name="productInfo"
+                      value={formData.productInfo}
+                      onChange={handleInputChange}
+                      placeholder="例如：分享你在台北最愛的咖啡店，或是遠端工作的經驗與心得"
+                      rows={6}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-900 mb-2">
+                      討論角度
+                    </label>
+                    <textarea
+                      name="characterSetting"
+                      value={formData.characterSetting}
+                      onChange={handleInputChange}
+                      placeholder="例如：個人經驗、客觀分析、比較評論"
+                      rows={3}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-none transition-all"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* 共用：生成數量選擇器 */}
+              <div className="bg-gradient-to-r from-gray-50 to-gray-100 border-2 border-gray-300 rounded-lg p-5">
+                <label className="block text-sm font-semibold text-gray-900 mb-3">
+                  📊 生成篇數
+                </label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="number"
+                    name="articleCount"
+                    value={formData.articleCount}
+                    onChange={handleInputChange}
+                    min="1"
+                    max="10"
+                    className="w-24 px-4 py-2.5 border border-gray-300 rounded-md focus:ring-2 focus:ring-gray-900 focus:border-transparent text-center font-semibold text-lg transition-all"
+                  />
+                  <div className="flex-1">
+                    <p className="text-sm text-gray-700">選擇要生成幾篇不同的文章</p>
+                    <p className="text-xs text-gray-500 mt-1">每篇都會自動配對圖片（建議 1-5 篇）</p>
+                  </div>
+                </div>
+              </div>
+
+
+              <button
+                onClick={handleGenerateContent}
+                disabled={loading || !formData.productName || !formData.productInfo}
+                className="w-full bg-gray-900 text-white py-4 rounded-md font-semibold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 shadow-sm"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>生成中...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-5 h-5" />
+                    <span>生成商品故事</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: 顯示生成的文案 */}
+        {step === 2 && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            <div className="mb-8">
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">AI 生成的商品故事</h2>
+              <p className="text-gray-600">接下來將從文案中提取地點，生成相關的街景圖片</p>
+            </div>
+
+            <div className="bg-gray-50 rounded-lg p-6 mb-8 border border-gray-200">
+              <div className="prose prose-lg max-w-none">
+                <p className="text-gray-800 whitespace-pre-wrap leading-relaxed">
+                  {generatedContent}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-4">
+              <button
+                onClick={() => setStep(1)}
+                className="flex-1 bg-white border-2 border-gray-300 text-gray-700 py-4 rounded-md font-semibold hover:border-gray-400 hover:bg-gray-50 transition-all"
+              >
+                重新編輯
+              </button>
+              <button
+                onClick={handleGenerateImages}
+                disabled={loading}
+                className="flex-1 bg-gray-900 text-white py-4 rounded-md font-semibold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 shadow-sm"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>生成圖片中...</span>
+                  </>
+                ) : (
+                  <>
+                    <MapPin className="w-5 h-5" />
+                    <span>生成地點圖片</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3: 顯示生成的圖片 */}
+        {step === 3 && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            <div className="mb-8">
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">生成的地點圖片</h2>
+              <p className="text-gray-600">已為您生成 {images.length} 張相關地點的街景圖片</p>
+            </div>
+
+            {/* 文案預覽 */}
+            <div className="bg-gray-50 rounded-lg p-5 mb-8 border border-gray-200">
+              <h3 className="font-semibold text-gray-900 mb-2 text-sm">文案內容</h3>
+              <p className="text-sm text-gray-700 line-clamp-3">{generatedContent}</p>
+            </div>
+
+            {/* 圖片網格 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+              {images.map((img, index) => (
+                <div key={index} className="group">
+                  <div className="aspect-w-16 aspect-h-9 bg-gray-100 rounded-lg overflow-hidden border border-gray-200">
+                    <img
+                      src={img.supabaseUrl}
+                      alt={`地點 ${index + 1}`}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <div className="flex items-center text-sm text-gray-600">
+                      <MapPin className="w-4 h-4 mr-1 text-gray-400" />
+                      <span className="font-mono text-xs">{locations[index]}</span>
+                    </div>
+                    <a
+                      href={img.supabaseUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-gray-900 hover:text-gray-700 font-medium"
+                    >
+                      查看原圖
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-4">
+              <button
+                onClick={resetForm}
+                className="flex-1 bg-white border-2 border-gray-300 text-gray-700 py-4 rounded-md font-semibold hover:border-gray-400 hover:bg-gray-50 transition-all"
+              >
+                重新開始
+              </button>
+              <button
+                onClick={() => {
+                  // 可以添加下載或保存邏輯
+                  alert('功能開發中');
+                }}
+                className="flex-1 bg-gray-900 text-white py-4 rounded-md font-semibold hover:bg-gray-800 transition-all flex items-center justify-center space-x-2 shadow-sm"
+              >
+                <ImageIcon className="w-5 h-5" />
+                <span>下載所有圖片</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Right Sidebar - 已儲存設定 */}
+      {showSidebar && (
+        <div className="w-80 bg-white border-l border-gray-200 flex flex-col h-screen sticky top-0">
+          {/* Sidebar Header */}
+          <div className="p-4 border-b border-gray-200">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-bold text-gray-900">已儲存設定</h2>
+              <button
+                onClick={() => setShowSidebar(false)}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-600">共 {savedSettings.length} 個設定檔</p>
+          </div>
+
+          {/* Settings List */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {savedSettings.length === 0 ? (
+              <div className="text-center py-12">
+                <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-sm text-gray-500">尚無儲存的設定</p>
+                <p className="text-xs text-gray-400 mt-1">填寫表單後即可儲存</p>
+              </div>
+            ) : (
+              savedSettings.map((setting) => (
+                <div
+                  key={setting.id}
+                  className="bg-gray-50 border border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-all group"
+                >
+                  {/* Setting Header */}
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-gray-900 text-sm mb-1">{setting.name}</h3>
+                      <p className="text-xs text-gray-500">
+                        {new Date(setting.createdAt).toLocaleString('zh-TW', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteSetting(setting.id)}
+                      className="p-1 hover:bg-red-50 rounded transition-colors opacity-0 group-hover:opacity-100"
+                    >
+                      <Trash2 className="w-4 h-4 text-red-500" />
+                    </button>
+                  </div>
+
+                  {/* Setting Preview */}
+                  <div className="text-xs text-gray-600 space-y-1 mb-3">
+                    <p className="truncate">
+                      <span className="font-medium">商品：</span>
+                      {setting.data.productName || '未填寫'}
+                    </p>
+                    <p className="line-clamp-2">
+                      <span className="font-medium">資訊：</span>
+                      {setting.data.productInfo ? setting.data.productInfo.substring(0, 50) + '...' : '未填寫'}
+                    </p>
+                    {setting.articles && setting.articles.length > 0 && (
+                      <p className="text-xs font-semibold text-blue-600 mt-2">
+                        已生成 {setting.articles.length} 篇文章
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => handleLoadSetting(setting)}
+                      className="w-full px-3 py-2 bg-gray-900 text-white rounded-md text-sm font-medium hover:bg-gray-800 transition-all"
+                    >
+                      載入此設定
+                    </button>
+                    {setting.articles && setting.articles.length > 0 && (
+                      <button
+                        onClick={() => setViewingArticles(setting)}
+                        className="w-full px-3 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-md text-sm font-medium hover:bg-blue-100 transition-all"
+                      >
+                        查看文章 ({setting.articles.length})
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 文章查看 Modal */}
+      {viewingArticles && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">{viewingArticles.name}</h2>
+                  <p className="text-sm text-gray-600 mt-1">共 {viewingArticles.articles.length} 篇文章</p>
+                </div>
+                <button
+                  onClick={() => setViewingArticles(null)}
+                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                >
+                  <X className="w-6 h-6 text-gray-500" />
+                </button>
+              </div>
+            </div>
+
+            {/* Articles List */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {viewingArticles.articles.map((article, index) => (
+                <div key={article.id} className="border border-gray-200 rounded-lg p-6 bg-gray-50">
+                  {/* Article Header */}
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">文章 #{index + 1}</h3>
+                    <span className="text-xs text-gray-500">
+                      {new Date(article.createdAt).toLocaleString('zh-TW')}
+                    </span>
+                  </div>
+
+                  {/* Article Content */}
+                  <div className="mb-4">
+                    <h4 className="text-sm font-semibold text-gray-700 mb-2">文章內容</h4>
+                    <div className="bg-white border border-gray-200 rounded-md p-4 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+                      {article.content}
+                    </div>
+                  </div>
+
+                  {/* Article Images */}
+                  {article.images && article.images.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">🖼️ 配對圖片 ({article.images.length} 張)</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        {article.images.map((image, imgIndex) => (
+                          <div key={imgIndex} className="relative">
+                            <img
+                              src={image.supabaseUrl}
+                              alt={`地點 ${imgIndex + 1}`}
+                              className="w-full h-40 object-cover rounded-md border border-gray-200"
+                            />
+                            <div className="absolute bottom-2 left-2 bg-black bg-opacity-60 text-white text-xs px-2 py-1 rounded">
+                              {image.location}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-gray-200 bg-gray-50">
+              <button
+                onClick={() => setViewingArticles(null)}
+                className="w-full px-4 py-2 bg-gray-900 text-white rounded-md font-medium hover:bg-gray-800 transition-all"
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      </div>
+      )}
+
+      {/* 單篇文章查看 Modal */}
+      {viewingArticle && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-gray-200 bg-blue-50">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    文章 #{generatedArticles.findIndex(a => a.id === viewingArticle.id) + 1}
+                  </h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {new Date(viewingArticle.createdAt).toLocaleString('zh-TW')}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setViewingArticle(null)}
+                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                >
+                  <X className="w-6 h-6 text-gray-500" />
+                </button>
+              </div>
+            </div>
+
+            {/* Article Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* Article Text */}
+              <div className="mb-6">
+                <h3 className="text-lg font-bold text-gray-900 mb-3 flex items-center">
+                  <FileText className="w-5 h-5 mr-2 text-blue-600" />
+                  文章內容
+                </h3>
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-5 text-gray-800 leading-relaxed whitespace-pre-wrap">
+                  {viewingArticle.content}
+                </div>
+              </div>
+
+              {/* Article Images */}
+              {viewingArticle.images && viewingArticle.images.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900 mb-3 flex items-center">
+                    <ImageIcon className="w-5 h-5 mr-2 text-blue-600" />
+                    配對圖片 ({viewingArticle.images.length} 張)
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    {viewingArticle.images.map((image, imgIndex) => (
+                      <div key={imgIndex} className="relative group">
+                        <img
+                          src={image.supabaseUrl}
+                          alt={`地點 ${imgIndex + 1}`}
+                          className="w-full h-48 object-cover rounded-lg border border-gray-200 shadow-sm group-hover:shadow-md transition-shadow"
+                        />
+                        <div className="absolute bottom-3 left-3 bg-black bg-opacity-70 text-white text-xs px-3 py-1.5 rounded-md font-medium">
+                          {image.location}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-gray-200 bg-gray-50">
+              <button
+                onClick={() => setViewingArticle(null)}
+                className="w-full px-4 py-3 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 transition-all"
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default ProductLocationStory;
